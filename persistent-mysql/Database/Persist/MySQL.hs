@@ -31,6 +31,7 @@ module Database.Persist.MySQL
     , copyUnlessEmpty
     , copyUnlessEq
     , openMySQLConn
+    , showCreateTables
     ) where
 
 import qualified Blaze.ByteString.Builder.ByteString as BBS
@@ -357,9 +358,26 @@ migrate' :: MySQL.ConnectInfo
          -> EntityDef
          -> IO (Either [Text] CautiousMigration)
 migrate' connectInfo allDefs getter val = do
+    let (newcols, _udefs, _fdefs) = mysqlMkColumns allDefs val
+    old <- getColumns connectInfo getter val newcols
+    pure $ migrateFrom old allDefs val
+
+showCreateTable :: [EntityDef] -> EntityDef -> [Sql]
+showCreateTable allDefs val = case migrateFrom [] allDefs val of
+    Left err -> error $ "Impossible: " <> show err
+    Right xs -> map snd xs
+
+showCreateTables :: [EntityDef] -> [Sql]
+showCreateTables xs = concatMap (showCreateTable xs) xs
+
+migrateFrom
+    :: [Either Text ExistingColumn]
+    -> [EntityDef]
+    -> EntityDef
+    -> Either [Text] CautiousMigration
+migrateFrom old allDefs val = do
     let name = getEntityDBName val
     let (newcols, udefs, fdefs) = mysqlMkColumns allDefs val
-    old <- getColumns connectInfo getter val newcols
     let udspair = map udToPair udefs
     case ([], old, partitionEithers old) of
         -- Nothing found, create everything
@@ -402,8 +420,7 @@ migrate' connectInfo allDefs getter val = do
                         )
                         fdefs
 
-            return
-                $ Right
+            Right
                 $ map showAlterDb
                 $ (addTable newcols val) : uniques ++ foreigns ++ foreignsAlt
 
@@ -434,14 +451,12 @@ migrate' connectInfo allDefs getter val = do
                     map (AlterColumn name) acs
                 ats' =
                     map (AlterTable  name) ats
-            return
-                $ Right
+            Right
                 $ map showAlterDb
                 $ acs' ++ ats'
 
         -- Errors
-        (_, _, (errs, _)) ->
-            return $ Left errs
+        (_, _, (errs, _)) -> Left errs
 
       where
         findTypeAndMaxLen tblName col =
@@ -597,6 +612,7 @@ udToPair ud = (uniqueDBName ud, map snd $ NEL.toList $ uniqueFields ud)
 
 ----------------------------------------------------------------------
 
+type ExistingColumn = Either Column (ConstraintNameDB, [FieldNameDB])
 
 -- | Returns all of the 'Column'@s@ in the given table currently
 -- in the database.
@@ -605,7 +621,7 @@ getColumns
     => MySQL.ConnectInfo
     -> (Text -> IO Statement)
     -> EntityDef -> [Column]
-    -> IO [Either Text (Either Column (ConstraintNameDB, [FieldNameDB]))]
+    -> IO [Either Text ExistingColumn]
 getColumns connectInfo getter def cols = do
 
     -- Find out all columns.
