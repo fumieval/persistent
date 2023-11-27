@@ -834,7 +834,8 @@ parseColumnType :: Text -> ColumnInfo -> ExceptT String IO (SqlType, Maybe Integ
 -- value explicitly set in `showSqlType` for SqlBool).
 --
 parseColumnType "tinyint" ci
-    | ciColumnType ci == "tinyint" || ciColumnType ci == "tinyint(1)" = return (SqlBool, Nothing)
+    | ciColumnType ci == "tinyint(1)" = return (SqlBool, Nothing)
+    | Just _ <- T.stripPrefix "tinyint" (ciColumnType ci) = return (SqlOther "tinyint", Nothing)
 parseColumnType "int" ci
     | ciColumnType ci == "int"     || ciColumnType ci == "int(11)"    = return (SqlInt32, Nothing)
 parseColumnType "bigint" ci
